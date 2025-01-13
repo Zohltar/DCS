@@ -152,7 +152,7 @@ end
 --AttackGroupTaskPush / set
 function AttackGroupTaskPush(attackerGroupName, attackedGroupName, typePush)
     -- attackerGroupName : le groupe qui va exécuter la tâche d'attaque.
-    -- attackGroup : le groupe cible de l'attaque à planifier.
+    -- attackedGroup : le groupe cible de l'attaque à planifier.
     -- typePush : 0 = push, 1 = set.
 
     local group = Group.getByName(attackerGroupName)
@@ -216,4 +216,95 @@ end
 function DestroyUnit( unitName )
 	local group = Group.findByUnit( unitName )
 
+end
+
+
+
+-- Fonction pour suivre la durée de vie d'une unité spawné et les détruire à la fin
+function subscribeLifeTimeChecker(grp, esperanceVie, flagName) -- (group = Groupe d'unité, esperanceVie = en secondes, flagName = nom du flag)
+    -- Vérifie si le groupe est déjà enregistré pour éviter les doublons
+    for _, entry in ipairs(flagsToCheck) do
+        if entry.group == grp then
+            env.warning("Le groupe " .. grp:GetName() .. " est déjà enregistré dans flagsToCheck.")
+            return
+        end
+    end
+
+    -- Ajoute le groupe à la liste des groupes à surveiller
+    table.insert(flagsToCheck, {group = grp, esperance = timer.getTime() + esperanceVie, flagName = flagName})
+
+    -- Démarre une minuterie pour surveiller la durée de vie des groupes
+    if not lifeTimeCheckerRunning then
+        lifeTimeCheckerRunning = true
+        timer.scheduleFunction(minuterieDeVie, nil, timer.getTime() + 1)
+    end
+end
+
+
+
+-- Fonction appelée périodiquement pour vérifier les durées de vie
+function minuterieDeVie()
+    local currentTime = timer.getTime()
+
+    for i = #flagsToCheck, 1, -1 do -- Parcourt la table en sens inverse pour supprimer les entrées
+        local entry = flagsToCheck[i]
+        local flagName = entry.flagName
+
+        -- Vérifie la durée de vie ou le flag
+        if currentTime >= entry.esperance or trigger.misc.getUserFlag(flagName) == 0 then
+            local group = entry.group
+            if group and group:IsAlive() then
+                env.info("Destruction du groupe: " .. group:GetName() .. " après " .. entry.esperance - (entry.esperance - currentTime) .. " secondes.")
+                group:Destroy()
+            end
+
+            -- Supprime l'entrée de la table et nettoie le flag
+            table.remove(flagsToCheck, i)
+            trigger.action.setUserFlag(flagName, 0)
+        end
+    end
+
+    -- Relance la minuterie si des groupes restent à surveiller
+    if #flagsToCheck > 0 then
+        timer.scheduleFunction(minuterieDeVie, nil, timer.getTime() + 1)
+    else
+        lifeTimeCheckerRunning = false
+        env.info("Aucun groupe restant à surveiller. Minuterie arrêtée.")
+    end
+end
+
+--générateur de spawn 
+
+function genSpawn(nomDuGroupTemplate, unitLimit, freqRespawn, zones) -- Nom du group de units à prendre comme template: string, nombre limite à créer = int, fréquence des respawn (indiquer 0 pour ne pas le définir dans cette fonction =  int, Tableau de nom de zones (optionnel) = moose script zones
+	local Spawn_Template = SPAWN:New( nomDuGroupTemplate )
+	Spawn_Template:InitLimit( unitLimit, 0 )
+	if zones ~= nil then Spawn_Template:InitRandomizeZones( zones )end
+	if freqRespawn ~= 0 then 
+		Spawn_Template:SpawnScheduled(freqRespawn, 0.5)
+		env.info("Spawn Template created for: " .. nomDuGroupTemplate)
+	end
+	
+	--on Spawn actions
+	Spawn_Template:OnSpawnGroup(function(grp)			
+		--Log dans le dcs.log
+		env.info("Spawned groupe name: " .. grp:GetName())		
+		end) 	
+	
+	return Spawn_Template
+end
+
+function setAircraftGroupsROEToReturnFire()
+    -- Récupérer tous les groupes d'aéronefs vivants dans la mission
+    local aircraftGroups = SET_GROUP:New():FilterCategories("plane"):FilterActive(true):FilterOnce()
+
+    -- Parcourir chaque groupe et définir le ROE à "Return Fire"
+    aircraftGroups:ForEachGroup(function(group)
+        if group then
+            env.info("Changing ROE to Return Fire for aircraft group: " .. group:GetName())
+            group:OptionROEHoldFire() -- Définit le ROE sur "Return Fire"
+        end
+    end)
+
+    -- Log dans le DCS log
+    env.info("ROE for all aircraft groups set to 'Return Fire'")
 end
